@@ -1,11 +1,23 @@
 """
-app.py — ЛР: обработка изображений (перестановка полос) + гистограмма RGB + капча
-+ подпись времени обработки на выходном изображении
-+ поддержка нескольких пользователей (у каждого — свои уникальные файлы)
-+ возможность скачать обработанное изображение
+app.py — готовая версия под Railway (и локально)
+✔ несколько пользователей (у каждого уникальные файлы)
+✔ капча (текстовая)
+✔ обмен соседних полос (верт/гор)
+✔ гистограмма RGB (без огромных списков -> экономия RAM)
+✔ подпись на изображении на РУССКОМ + время обработки
+✔ скачивание результата
+✔ устойчиво к большим фото (уменьшение img.thumbnail)
+✔ обработчики ошибок (413, битая картинка и т.п.)
 
-Требования:
-pip install flask pillow matplotlib
+Установка:
+pip install flask pillow matplotlib gunicorn
+
+Railway Start Command (пример):
+gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --threads 2 --timeout 120
+
+Структура:
+- app.py
+- templates/index.html
 """
 
 import os
@@ -27,7 +39,7 @@ from flask import (
 )
 from werkzeug.utils import secure_filename
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, UnidentifiedImageError
 
 import matplotlib
 matplotlib.use("Agg")
@@ -35,40 +47,41 @@ import matplotlib.pyplot as plt
 
 
 # ----------------------------
-# Настройки приложения
+# Flask config
 # ----------------------------
 app = Flask(__name__)
-app.secret_key = "student_secret_key_123"  # для session (в реальном проекте хранить в env)
+app.secret_key = os.environ.get("SECRET_KEY", "student_secret_key_123")
 
-BASE_DIR = Path(__file__).resolve().parent
-UPLOAD_DIR = BASE_DIR / "static" / "uploads"
-OUTPUT_DIR = BASE_DIR / "static" / "outputs"
-
+# На Railway файловая система эфемерная, но /tmp обычно доступен на запись и быстрее/надежнее
+UPLOAD_DIR = Path(os.environ.get("UPLOAD_DIR", "/tmp/uploads"))
+OUTPUT_DIR = Path(os.environ.get("OUTPUT_DIR", "/tmp/outputs"))
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-# Ограничим типы файлов (чтобы не принимали что угодно)
+# Ограничим размер загрузки (уменьшает шанс OOM и 413)
+# Если хочешь больше — увеличивай аккуратно
+app.config["MAX_CONTENT_LENGTH"] = int(os.environ.get("MAX_UPLOAD_BYTES", str(5 * 1024 * 1024)))  # 5MB по умолчанию
+
+# Разрешённые расширения
 ALLOWED_EXT = {".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp"}
 
-# Максимальный размер загрузки (например 10 МБ)
-app.config["MAX_CONTENT_LENGTH"] = 10 * 1024 * 1024
+# Ограничение по размеру изображения (важно для Railway, чтобы не падало по памяти)
+# img.thumbnail() приведёт к этому максимуму, сохраняя пропорции
+MAX_IMAGE_SIDE = int(os.environ.get("MAX_IMAGE_SIDE", "1200"))  # 1200px по умолчанию
 
 
 # ----------------------------
-# Утилиты
+# Helpers
 # ----------------------------
 def is_allowed_filename(filename: str) -> bool:
-    ext = Path(filename).suffix.lower()
-    return ext in ALLOWED_EXT
+    return Path(filename).suffix.lower() in ALLOWED_EXT
 
 
 def make_request_id() -> str:
-    """Уникальный id для файлов (чтобы несколько пользователей не перетирали друг другу результаты)."""
     return uuid.uuid4().hex
 
 
 def new_captcha() -> str:
-    """Простая капча: 5 символов (буквы+цифры). Храним в session."""
     chars = string.ascii_uppercase + string.digits
     code = "".join(random.choice(chars) for _ in range(5))
     session["captcha"] = code
@@ -76,7 +89,7 @@ def new_captcha() -> str:
 
 
 # ----------------------------
-# Обработка изображений
+# Image processing
 # ----------------------------
 def swap_stripes(img: Image.Image, stripe: int, direction: str) -> Image.Image:
     """Меняет местами соседние полосы фиксированной ширины (вертикально/горизонтально)."""
@@ -94,17 +107,14 @@ def swap_stripes(img: Image.Image, stripe: int, direction: str) -> Image.Image:
             b_start = a_end
             b_end = min(a_end + stripe, w)
 
-            # если второй полосы уже нет — копируем остаток
             if b_start >= w:
                 out.paste(img.crop((a_start, 0, a_end, h)), (a_start, 0))
                 break
 
             part_a = img.crop((a_start, 0, a_end, h))
             part_b = img.crop((b_start, 0, b_end, h))
-
             out.paste(part_b, (a_start, 0))
             out.paste(part_a, (b_start, 0))
-
             x = b_end
     else:
         y = 0
@@ -120,29 +130,31 @@ def swap_stripes(img: Image.Image, stripe: int, direction: str) -> Image.Image:
 
             part_a = img.crop((0, a_start, w, a_end))
             part_b = img.crop((0, b_start, w, b_end))
-
             out.paste(part_b, (0, a_start))
             out.paste(part_a, (0, b_start))
-
             y = b_end
 
     return out
 
 
 def make_rgb_histogram(img: Image.Image, save_path: Path) -> None:
-    """Строит гистограмму распределения значений R/G/B и сохраняет в PNG."""
+    """
+    Экономичная гистограмма:
+    НЕ создаём list(pixels) (это и убивает память).
+    Используем встроенный histogram() -> 768 чисел (256*3).
+    """
     rgb = img.convert("RGB")
-    pixels = list(rgb.getdata())
-
-    r = [p[0] for p in pixels]
-    g = [p[1] for p in pixels]
-    b = [p[2] for p in pixels]
+    hist = rgb.histogram()  # [R(256), G(256), B(256)]
+    r = hist[0:256]
+    g = hist[256:512]
+    b = hist[512:768]
 
     plt.figure()
-    plt.hist(r, bins=256, alpha=0.6, label="R")
-    plt.hist(g, bins=256, alpha=0.6, label="G")
-    plt.hist(b, bins=256, alpha=0.6, label="B")
-    plt.title("Распределение цветов (RGB) для исходного изображения")
+    # matplotlib тут рисует линии — памяти почти не ест
+    plt.plot(r, label="R")
+    plt.plot(g, label="G")
+    plt.plot(b, label="B")
+    plt.title("Гистограмма распределения цветов (RGB)")
     plt.xlabel("Значение (0..255)")
     plt.ylabel("Количество пикселей")
     plt.legend()
@@ -151,31 +163,36 @@ def make_rgb_histogram(img: Image.Image, save_path: Path) -> None:
     plt.close()
 
 
+def _load_cyrillic_font(size: int) -> ImageFont.ImageFont:
+    """
+    На Linux/Railway почти всегда есть DejaVuSans — поддерживает кириллицу.
+    Если нет — fallback.
+    """
+    candidates = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/dejavu/DejaVuSans.ttf",
+        "DejaVuSans.ttf",
+        "arial.ttf",
+    ]
+    for p in candidates:
+        try:
+            return ImageFont.truetype(p, size)
+        except OSError:
+            continue
+    return ImageFont.load_default()
+
+
 def draw_processing_time(img: Image.Image, elapsed_ms: float, stripe: int, direction: str) -> Image.Image:
-    """
-    Пишем на картинке время обработки и параметры на РУССКОМ.
-    """
+    """Пишем на изображении время и параметры на русском."""
     base = img.convert("RGBA")
     draw = ImageDraw.Draw(base)
 
-    # Перевод направления на русский
     direction_ru = "вертикально" if direction == "vertical" else "горизонтально"
+    text = f"Время: {elapsed_ms:.1f} мс | Полоса: {stripe} px | Направление: {direction_ru}"
 
-    text = f"Время обработки: {elapsed_ms:.1f} мс | Ширина полосы: {stripe} px | Направление: {direction_ru}"
+    font = _load_cyrillic_font(22)
 
-    # Шрифт с поддержкой кириллицы (Railway/Linux)
-    # 1) пробуем DejaVuSans (обычно есть)
-    # 2) если нет — пробуем arial
-    # 3) если нет — стандартный (может быть без кириллицы, но редко)
-    try:
-        font = ImageFont.truetype("static/fonts/DejaVuSans.ttf", 22)
-    except OSError:
-        try:
-            font = ImageFont.truetype("arial.ttf", 22)
-        except OSError:
-            font = ImageFont.load_default()
-
-    # Размер текста (совместимость Pillow)
+    # измеряем текст
     try:
         bbox = draw.textbbox((0, 0), text, font=font)
         text_w = bbox[2] - bbox[0]
@@ -183,33 +200,60 @@ def draw_processing_time(img: Image.Image, elapsed_ms: float, stripe: int, direc
     except AttributeError:
         text_w, text_h = draw.textsize(text, font=font)
 
-    padding = 10
-    x = padding
-    y = padding
+    pad = 10
+    x, y = pad, pad
+    rect = (x - pad, y - pad, x + text_w + pad, y + text_h + pad)
 
-    # Подложка под текст
-    rect = (x - padding, y - padding, x + text_w + padding, y + text_h + padding)
+    # подложка
     draw.rectangle(rect, fill=(0, 0, 0, 140))
-
-    # Текст
     draw.text((x, y), text, font=font, fill=(255, 255, 255, 255))
 
     return base.convert(img.mode)
 
 
+def downscale_for_server(img: Image.Image) -> Image.Image:
+    """
+    Уменьшает изображение до MAX_IMAGE_SIDE, чтобы не убиться по RAM на Railway.
+    thumbnail() меняет изображение "на месте", поэтому делаем копию, чтобы не портить объект,
+    если вдруг это нужно (здесь не критично, но аккуратнее).
+    """
+    out = img.copy()
+    out.thumbnail((MAX_IMAGE_SIDE, MAX_IMAGE_SIDE))
+    return out
+
 
 # ----------------------------
-# Роуты
+# Error handlers
+# ----------------------------
+@app.errorhandler(413)
+def too_large(_e):
+    # если капчи не было — создадим
+    if "captcha" not in session:
+        new_captcha()
+    else:
+        new_captcha()
+
+    return render_template(
+        "index.html",
+        captcha=session["captcha"],
+        result_img=None,
+        hist_img=None,
+        download_url=None,
+        stripe=20,
+        direction="vertical",
+        error=f"Файл слишком большой. Максимум {app.config['MAX_CONTENT_LENGTH'] // (1024*1024)} МБ.",
+    ), 413
+
+
+# ----------------------------
+# Routes
 # ----------------------------
 @app.route("/", methods=["GET", "POST"])
 def index():
-    # если капчи нет — создаём
     if "captcha" not in session:
         new_captcha()
 
-    # -------------------------
-    # GET: открыли страницу — очищаем прошлые результаты (вариант 1)
-    # -------------------------
+    # Вариант 1: при открытии страницы сбрасываем прошлые результаты
     if request.method == "GET":
         session.pop("last_result_img", None)
         session.pop("last_hist_img", None)
@@ -278,6 +322,7 @@ def index():
             error="Недопустимый тип файла. Разрешены: PNG/JPG/JPEG/BMP/GIF/WEBP.",
         )
 
+    # параметры
     direction = request.form.get("direction", "vertical")
     if direction not in {"vertical", "horizontal"}:
         direction = "vertical"
@@ -289,25 +334,40 @@ def index():
         stripe = 20
     stripe = max(1, min(stripe, 5000))
 
-    # уникальные имена файлов
+    # -------------------------
+    # Уникальные имена (многопользовательский режим)
+    # -------------------------
     req_id = make_request_id()
-    input_path = UPLOAD_DIR / f"input_{req_id}{Path(filename).suffix.lower()}"
+    ext = Path(filename).suffix.lower()
+
+    input_path = UPLOAD_DIR / f"input_{req_id}{ext}"
     output_img_path = OUTPUT_DIR / f"output_{req_id}.png"
     output_hist_path = OUTPUT_DIR / f"hist_{req_id}.png"
 
     file.save(str(input_path))
 
+    # -------------------------
+    # Обработка
+    # -------------------------
     try:
         with Image.open(str(input_path)) as img:
-            make_rgb_histogram(img, output_hist_path)
+            # уменьшаем перед всем, чтобы не словить OOM
+            img_small = downscale_for_server(img)
 
+            # гистограмма (экономичная)
+            make_rgb_histogram(img_small, output_hist_path)
+
+            # перестановка полос + время
             t0 = time.perf_counter()
-            out_img = swap_stripes(img, stripe, direction)
+            out_img = swap_stripes(img_small, stripe, direction)
             elapsed_ms = (time.perf_counter() - t0) * 1000.0
 
+            # подпись на русском
             out_img = draw_processing_time(out_img, elapsed_ms, stripe, direction)
+
             out_img.save(str(output_img_path))
-    except Exception as e:
+
+    except UnidentifiedImageError:
         new_captcha()
         return render_template(
             "index.html",
@@ -317,26 +377,86 @@ def index():
             download_url=None,
             stripe=stripe,
             direction=direction,
-            error=f"Ошибка обработки изображения: {type(e).__name__}",
+            error="Файл не распознан как изображение. Попробуйте PNG/JPG/WEBP.",
         )
+    except Exception as e:
+        # чтобы сайт не падал даже при неожиданных ошибках
+        new_captcha()
+        return render_template(
+            "index.html",
+            captcha=session["captcha"],
+            result_img=None,
+            hist_img=None,
+            download_url=None,
+            stripe=stripe,
+            direction=direction,
+            error=f"Ошибка обработки: {type(e).__name__}",
+        )
+    finally:
+        # можно удалить входной файл, чтобы не копить мусор
+        try:
+            input_path.unlink(missing_ok=True)
+        except Exception:
+            pass
 
-    # сохраняем для показа результата
-    session["last_result_img"] = f"outputs/{output_img_path.name}"
-    session["last_hist_img"] = f"outputs/{output_hist_path.name}"
+    # сохраняем для показа результата (для ЭТОГО пользователя)
+    session["last_result_img"] = output_img_path.name
+    session["last_hist_img"] = output_hist_path.name
     session["last_download_url"] = url_for("download_result", file_name=output_img_path.name)
     session["last_stripe"] = stripe
     session["last_direction"] = direction
 
     new_captcha()
-    return redirect(url_for("index"))
+    return redirect(url_for("show_result"))
+
+
+@app.route("/result")
+def show_result():
+    """Страница результата (чтобы после POST не повторялась отправка формы)."""
+    if "captcha" not in session:
+        new_captcha()
+
+    result_name = session.get("last_result_img")
+    hist_name = session.get("last_hist_img")
+    download_url = session.get("last_download_url")
+    stripe = session.get("last_stripe", 20)
+    direction = session.get("last_direction", "vertical")
+
+    # если результатов нет — покажем пустую форму
+    if not result_name or not hist_name:
+        return redirect(url_for("index"))
+
+    return render_template(
+        "index.html",
+        captcha=session["captcha"],
+        result_img=url_for("get_output_file", file_name=result_name),
+        hist_img=url_for("get_output_file", file_name=hist_name),
+        download_url=download_url,
+        stripe=stripe,
+        direction=direction,
+        error=None,
+    )
+
+
+@app.route("/files/<path:file_name>")
+def get_output_file(file_name: str):
+    """Отдаём изображения результата/гистограммы из OUTPUT_DIR."""
+    # простая защита: только наши имена
+    if not (file_name.startswith("output_") or file_name.startswith("hist_")):
+        abort(404)
+    # только png
+    if not file_name.lower().endswith(".png"):
+        abort(404)
+
+    file_path = OUTPUT_DIR / file_name
+    if not file_path.exists():
+        abort(404)
+    return send_from_directory(str(OUTPUT_DIR), file_name)
+
 
 @app.route("/download/<path:file_name>")
 def download_result(file_name: str):
-    """
-    Скачивание обработанного изображения.
-    Мы ограничиваем скачивание только папкой OUTPUT_DIR.
-    """
-    # небольшая защита: скачиваем только output_*.png
+    """Скачивание обработанного изображения."""
     if not file_name.startswith("output_") or not file_name.lower().endswith(".png"):
         abort(404)
 
@@ -344,21 +464,12 @@ def download_result(file_name: str):
     if not file_path.exists():
         abort(404)
 
-    # as_attachment=True => браузер скачает файл
     return send_from_directory(str(OUTPUT_DIR), file_name, as_attachment=True)
 
 
-@app.route("/static/<path:filename>")
-def static_files(filename):
-    """Если нужно отдельное обслуживание static (обычно Flask и так умеет /static)."""
-    return send_from_directory(str(BASE_DIR / "static"), filename)
-
-
+# ----------------------------
+# Local run (Railway запускает через gunicorn)
+# ----------------------------
 if __name__ == "__main__":
-    # debug=True удобно для разработки, для деплоя обычно выключают
-    app.run(host="0.0.0.0", port=5000, debug=True)
-
-
-
-
-
+    port = int(os.environ.get("PORT", "5000"))
+    app.run(host="0.0.0.0", port=port, debug=True)
