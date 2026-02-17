@@ -153,22 +153,29 @@ def make_rgb_histogram(img: Image.Image, save_path: Path) -> None:
 
 def draw_processing_time(img: Image.Image, elapsed_ms: float, stripe: int, direction: str) -> Image.Image:
     """
-    Рисует на изображении время обработки + параметры.
-    Возвращает изображение того же режима, что и входное.
+    Пишем на картинке время обработки и параметры на РУССКОМ.
     """
-    # Рисовать удобнее в RGBA
     base = img.convert("RGBA")
     draw = ImageDraw.Draw(base)
 
-    text = f"Время: {elapsed_ms:.1f} мс | Полоса: {stripe}px | Направление: {direction}"
+    # Перевод направления на русский
+    direction_ru = "вертикально" if direction == "vertical" else "горизонтально"
 
-    # Шрифт: пытаемся truetype, иначе встроенный
+    text = f"Время обработки: {elapsed_ms:.1f} мс | Ширина полосы: {stripe} px | Направление: {direction_ru}"
+
+    # Шрифт с поддержкой кириллицы (Railway/Linux)
+    # 1) пробуем DejaVuSans (обычно есть)
+    # 2) если нет — пробуем arial
+    # 3) если нет — стандартный (может быть без кириллицы, но редко)
     try:
-        font = ImageFont.truetype("arial.ttf", 22)
+        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 22)
     except OSError:
-        font = ImageFont.load_default()
+        try:
+            font = ImageFont.truetype("arial.ttf", 22)
+        except OSError:
+            font = ImageFont.load_default()
 
-    # Размер текста (совместимость: Pillow может не иметь textbbox)
+    # Размер текста (совместимость Pillow)
     try:
         bbox = draw.textbbox((0, 0), text, font=font)
         text_w = bbox[2] - bbox[0]
@@ -180,15 +187,15 @@ def draw_processing_time(img: Image.Image, elapsed_ms: float, stripe: int, direc
     x = padding
     y = padding
 
-    # Подложка
+    # Подложка под текст
     rect = (x - padding, y - padding, x + text_w + padding, y + text_h + padding)
     draw.rectangle(rect, fill=(0, 0, 0, 140))
 
     # Текст
     draw.text((x, y), text, font=font, fill=(255, 255, 255, 255))
 
-    # Вернем исходный режим (например RGB)
     return base.convert(img.mode)
+
 
 
 # ----------------------------
@@ -344,3 +351,4 @@ def static_files(filename):
 if __name__ == "__main__":
     # debug=True удобно для разработки, для деплоя обычно выключают
     app.run(host="0.0.0.0", port=5000, debug=True)
+
