@@ -168,7 +168,7 @@ def draw_processing_time(img: Image.Image, elapsed_ms: float, stripe: int, direc
     # 2) если нет — пробуем arial
     # 3) если нет — стандартный (может быть без кириллицы, но редко)
     try:
-        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 22)
+        font = ImageFont.truetype("static/fonts/DejaVuSans.ttf", 22)
     except OSError:
         try:
             font = ImageFont.truetype("arial.ttf", 22)
@@ -351,4 +351,5 @@ def static_files(filename):
 if __name__ == "__main__":
     # debug=True удобно для разработки, для деплоя обычно выключают
     app.run(host="0.0.0.0", port=5000, debug=True)
+
 
