@@ -68,12 +68,12 @@
     <div class="row">
       <div>
         <h4>Изменённое изображение</h4>
-        <img src="{{ url_for('static_files', filename=result_img) }}" alt="output">
+        <img src="{{ result_img }}" alt="output">
       </div>
 
       <div>
         <h4>График распределения цветов (исходник)</h4>
-        <img src="{{ url_for('static_files', filename=hist_img) }}" alt="hist">
+        <img src="{{ hist_img }}" alt="hist">
       </div>
     </div>
   {% endif %}
