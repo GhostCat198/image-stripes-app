@@ -207,18 +207,25 @@ def index():
     if "captcha" not in session:
         new_captcha()
 
-    if request.method == "GET":
-        # Покажем страницу и (если есть) последние результаты пользователя
-        return render_template(
-            "index.html",
-            captcha=session["captcha"],
-            result_img=session.get("last_result_img"),
-            hist_img=session.get("last_hist_img"),
-            download_url=session.get("last_download_url"),
-            stripe=session.get("last_stripe"),
-            direction=session.get("last_direction"),
-            error=None,
-        )
+  if request.method == "GET":
+    # При открытии страницы "с нуля" скрываем прошлые результаты
+    session.pop("last_result_img", None)
+    session.pop("last_hist_img", None)
+    session.pop("last_download_url", None)
+    session.pop("last_stripe", None)
+    session.pop("last_direction", None)
+
+    return render_template(
+        "index.html",
+        captcha=session["captcha"],
+        result_img=None,
+        hist_img=None,
+        download_url=None,
+        stripe=20,
+        direction="vertical",
+        error=None,
+    )
+
 
     # ----------------------------
     # POST: проверка капчи
@@ -351,5 +358,6 @@ def static_files(filename):
 if __name__ == "__main__":
     # debug=True удобно для разработки, для деплоя обычно выключают
     app.run(host="0.0.0.0", port=5000, debug=True)
+
 
 
