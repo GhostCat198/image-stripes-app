@@ -206,8 +206,7 @@ def index():
     # создаём капчу при первом заходе
     if "captcha" not in session:
         new_captcha()
-
-  if request.method == "GET":
+if request.method == "GET":
     # При открытии страницы "с нуля" скрываем прошлые результаты
     session.pop("last_result_img", None)
     session.pop("last_hist_img", None)
@@ -358,6 +357,7 @@ def static_files(filename):
 if __name__ == "__main__":
     # debug=True удобно для разработки, для деплоя обычно выключают
     app.run(host="0.0.0.0", port=5000, debug=True)
+
 
 
 
