@@ -1,24 +1,3 @@
-"""
-app.py — готовая версия под Railway (и локально)
-✔ несколько пользователей (у каждого уникальные файлы)
-✔ капча (текстовая)
-✔ обмен соседних полос (верт/гор)
-✔ гистограмма RGB (без огромных списков -> экономия RAM)
-✔ подпись на изображении на РУССКОМ + время обработки
-✔ скачивание результата
-✔ устойчиво к большим фото (уменьшение img.thumbnail)
-✔ обработчики ошибок (413, битая картинка и т.п.)
-
-Установка:
-pip install flask pillow matplotlib gunicorn
-
-Railway Start Command (пример):
-gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --threads 2 --timeout 120
-
-Структура:
-- app.py
-- templates/index.html
-"""
 
 import os
 import time
@@ -485,5 +464,6 @@ def download_result(file_name: str):
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "5000"))
     app.run(host="0.0.0.0", port=port, debug=True)
+
 
 
