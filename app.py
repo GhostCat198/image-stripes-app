@@ -192,9 +192,9 @@ def draw_processing_time(img: Image.Image, elapsed_ms: float, stripe: int, direc
 
     # --- Шрифт с кириллицей ---
     try:
-        font = ImageFont.truetype(
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 22
-        )
+        font = ImageFont.truetype("static/fonts/DejaVuSans.ttf", 22)
+
+            
     except OSError:
         # если вдруг нет — fallback
         font = ImageFont.load_default()
@@ -485,4 +485,5 @@ def download_result(file_name: str):
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "5000"))
     app.run(host="0.0.0.0", port=port, debug=True)
+
 
