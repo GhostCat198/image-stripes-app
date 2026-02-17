@@ -183,16 +183,23 @@ def _load_cyrillic_font(size: int) -> ImageFont.ImageFont:
 
 
 def draw_processing_time(img: Image.Image, elapsed_ms: float, stripe: int, direction: str) -> Image.Image:
-    """Пишем на изображении время и параметры на русском."""
     base = img.convert("RGBA")
     draw = ImageDraw.Draw(base)
 
+    # Русский текст
     direction_ru = "вертикально" if direction == "vertical" else "горизонтально"
-    text = f"Время: {elapsed_ms:.1f} мс | Полоса: {stripe} px | Направление: {direction_ru}"
+    text = f"Время обработки: {elapsed_ms:.1f} мс | Ширина полосы: {stripe} px | Направление: {direction_ru}"
 
-    font = _load_cyrillic_font(22)
+    # --- Шрифт с кириллицей ---
+    try:
+        font = ImageFont.truetype(
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 22
+        )
+    except OSError:
+        # если вдруг нет — fallback
+        font = ImageFont.load_default()
 
-    # измеряем текст
+    # Размер текста
     try:
         bbox = draw.textbbox((0, 0), text, font=font)
         text_w = bbox[2] - bbox[0]
@@ -200,12 +207,17 @@ def draw_processing_time(img: Image.Image, elapsed_ms: float, stripe: int, direc
     except AttributeError:
         text_w, text_h = draw.textsize(text, font=font)
 
-    pad = 10
-    x, y = pad, pad
-    rect = (x - pad, y - pad, x + text_w + pad, y + text_h + pad)
+    padding = 10
+    x, y = padding, padding
 
-    # подложка
+    # Подложка
+    rect = (x - padding, y - padding,
+            x + text_w + padding,
+            y + text_h + padding)
+
     draw.rectangle(rect, fill=(0, 0, 0, 140))
+
+    # Сам текст
     draw.text((x, y), text, font=font, fill=(255, 255, 255, 255))
 
     return base.convert(img.mode)
@@ -473,3 +485,4 @@ def download_result(file_name: str):
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "5000"))
     app.run(host="0.0.0.0", port=port, debug=True)
+
