@@ -10,6 +10,8 @@
     .box { padding: 12px; border: 1px solid #ddd; border-radius: 8px; max-width: 520px; }
     label { display: inline-block; width: 180px; }
     .captcha { font-weight: bold; font-size: 22px; letter-spacing: 4px; background: #f2f2f2; padding: 6px 10px; display: inline-block; }
+    .btn { display: inline-block; padding: 8px 12px; border: 1px solid #888; border-radius: 6px; background: #f7f7f7; cursor: pointer; text-decoration: none; color: #000; }
+    .btn:hover { background: #eee; }
   </style>
 </head>
 <body>
@@ -25,14 +27,14 @@
       <p>
         <label>Направление:</label>
         <select name="direction">
-          <option value="vertical">Вертикальные полосы</option>
-          <option value="horizontal">Горизонтальные полосы</option>
+          <option value="vertical" {% if direction == "vertical" %}selected{% endif %}>Вертикальные полосы</option>
+          <option value="horizontal" {% if direction == "horizontal" %}selected{% endif %}>Горизонтальные полосы</option>
         </select>
       </p>
 
       <p>
         <label>Ширина полосы (px):</label>
-        <input type="number" name="stripe" value="20" min="1">
+        <input type="number" name="stripe" value="{{ stripe or 20 }}" min="1">
       </p>
 
       <!-- КАПЧА -->
@@ -45,7 +47,7 @@
         <input type="text" name="captcha_text" required>
       </p>
 
-      <button type="submit">Обработать</button>
+      <button class="btn" type="submit">Обработать</button>
     </form>
 
     {% if error %}
@@ -55,6 +57,14 @@
 
   {% if result_img and hist_img %}
     <h3>Результаты</h3>
+
+    <!-- ссылка на скачивание -->
+    {% if download_url %}
+      <p>
+        <a class="btn" href="{{ download_url }}">Скачать обработанное изображение</a>
+      </p>
+    {% endif %}
+
     <div class="row">
       <div>
         <h4>Изменённое изображение</h4>
