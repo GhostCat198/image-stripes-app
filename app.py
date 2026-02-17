@@ -1,8 +1,9 @@
 import os
 import random
 import string
+import time
 from flask import Flask, render_template, request, send_from_directory, session
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 import matplotlib
 
 matplotlib.use("Agg")
@@ -69,6 +70,7 @@ def swap_stripes(img: Image.Image, stripe: int, direction: str) -> Image.Image:
     return out
 
 
+
 def make_rgb_histogram(img: Image.Image, save_path: str) -> None:
     rgb = img.convert("RGB")
     pixels = list(rgb.getdata())
@@ -88,7 +90,37 @@ def make_rgb_histogram(img: Image.Image, save_path: str) -> None:
     plt.tight_layout()
     plt.savefig(save_path)
     plt.close()
+    
+def draw_processing_time(img: Image.Image, elapsed_ms: float) -> Image.Image:
+    """Рисует время обработки на изображении и возвращает новое изображение."""
+    out = img.convert("RGBA")
+    draw = ImageDraw.Draw(out)
 
+    text = f"Время обработки: {elapsed_ms:.1f} мс"
+
+    # Попытка загрузить шрифт (если нет — используем стандартный)
+    try:
+        font = ImageFont.truetype("arial.ttf", 24)
+    except OSError:
+        font = ImageFont.load_default()
+
+    # Размер текста
+    bbox = draw.textbbox((0, 0), text, font=font)
+    text_w = bbox[2] - bbox[0]
+    text_h = bbox[3] - bbox[1]
+
+    padding = 10
+    x = padding
+    y = padding
+
+    # Полупрозрачная подложка под текст
+    rect = (x - padding, y - padding, x + text_w + padding, y + text_h + padding)
+    draw.rectangle(rect, fill=(0, 0, 0, 140))
+
+    # Сам текст
+    draw.text((x, y), text, font=font, fill=(255, 255, 255, 255))
+
+    return out.convert(img.mode)
 
 @app.route("/", methods=["GET", "POST"])
 def index():
@@ -136,9 +168,19 @@ def index():
     hist_path = os.path.join(OUTPUT_DIR, "hist.png")
     make_rgb_histogram(img, hist_path)
 
-    out_img = swap_stripes(img, stripe, direction)
-    out_path = os.path.join(OUTPUT_DIR, "output.png")
-    out_img.save(out_path)
+    # --- замер времени ---
+t0 = time.perf_counter()
+
+out_img = swap_stripes(img, stripe, direction)
+
+elapsed_ms = (time.perf_counter() - t0) * 1000.0
+
+# --- добавляем подпись ---
+out_img = draw_processing_time(out_img, elapsed_ms)
+
+out_path = os.path.join(OUTPUT_DIR, "output.png")
+out_img.save(out_path)
+
 
     # после успешной обработки — обновим капчу на следующую попытку
     new_captcha()
@@ -160,3 +202,4 @@ def static_files(filename):
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=True)
+
