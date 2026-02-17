@@ -203,32 +203,34 @@ def draw_processing_time(img: Image.Image, elapsed_ms: float, stripe: int, direc
 # ----------------------------
 @app.route("/", methods=["GET", "POST"])
 def index():
-    # создаём капчу при первом заходе
+    # если капчи нет — создаём
     if "captcha" not in session:
         new_captcha()
-if request.method == "GET":
-    # При открытии страницы "с нуля" скрываем прошлые результаты
-    session.pop("last_result_img", None)
-    session.pop("last_hist_img", None)
-    session.pop("last_download_url", None)
-    session.pop("last_stripe", None)
-    session.pop("last_direction", None)
 
-    return render_template(
-        "index.html",
-        captcha=session["captcha"],
-        result_img=None,
-        hist_img=None,
-        download_url=None,
-        stripe=20,
-        direction="vertical",
-        error=None,
-    )
+    # -------------------------
+    # GET: открыли страницу — очищаем прошлые результаты (вариант 1)
+    # -------------------------
+    if request.method == "GET":
+        session.pop("last_result_img", None)
+        session.pop("last_hist_img", None)
+        session.pop("last_download_url", None)
+        session.pop("last_stripe", None)
+        session.pop("last_direction", None)
 
+        return render_template(
+            "index.html",
+            captcha=session["captcha"],
+            result_img=None,
+            hist_img=None,
+            download_url=None,
+            stripe=20,
+            direction="vertical",
+            error=None,
+        )
 
-    # ----------------------------
+    # -------------------------
     # POST: проверка капчи
-    # ----------------------------
+    # -------------------------
     user_captcha = request.form.get("captcha_text", "").strip().upper()
     real_captcha = session.get("captcha", "")
 
@@ -240,12 +242,14 @@ if request.method == "GET":
             result_img=None,
             hist_img=None,
             download_url=None,
+            stripe=20,
+            direction="vertical",
             error="Капча введена неверно. Попробуйте ещё раз.",
         )
 
-    # ----------------------------
+    # -------------------------
     # POST: проверка файла
-    # ----------------------------
+    # -------------------------
     file = request.files.get("image")
     if not file or not file.filename:
         new_captcha()
@@ -255,6 +259,8 @@ if request.method == "GET":
             result_img=None,
             hist_img=None,
             download_url=None,
+            stripe=20,
+            direction="vertical",
             error="Файл не выбран.",
         )
 
@@ -267,10 +273,11 @@ if request.method == "GET":
             result_img=None,
             hist_img=None,
             download_url=None,
+            stripe=20,
+            direction="vertical",
             error="Недопустимый тип файла. Разрешены: PNG/JPG/JPEG/BMP/GIF/WEBP.",
         )
 
-    # параметры от пользователя
     direction = request.form.get("direction", "vertical")
     if direction not in {"vertical", "horizontal"}:
         direction = "vertical"
@@ -280,55 +287,48 @@ if request.method == "GET":
         stripe = int(stripe_str)
     except ValueError:
         stripe = 20
-    stripe = max(1, min(stripe, 5000))  # простая защита от странных значений
+    stripe = max(1, min(stripe, 5000))
 
-    # ----------------------------
-    # Уникальные имена файлов (для многопользовательского режима)
-    # ----------------------------
+    # уникальные имена файлов
     req_id = make_request_id()
-
     input_path = UPLOAD_DIR / f"input_{req_id}{Path(filename).suffix.lower()}"
     output_img_path = OUTPUT_DIR / f"output_{req_id}.png"
     output_hist_path = OUTPUT_DIR / f"hist_{req_id}.png"
 
-    # сохраняем входной файл
     file.save(str(input_path))
 
-    # ----------------------------
-    # Обработка
-    # ----------------------------
-    # Открываем изображение
-    with Image.open(str(input_path)) as img:
-        # строим гистограмму исходника
-        make_rgb_histogram(img, output_hist_path)
+    try:
+        with Image.open(str(input_path)) as img:
+            make_rgb_histogram(img, output_hist_path)
 
-        # замер времени перестановки полос
-        t0 = time.perf_counter()
-        out_img = swap_stripes(img, stripe, direction)
-        elapsed_ms = (time.perf_counter() - t0) * 1000.0
+            t0 = time.perf_counter()
+            out_img = swap_stripes(img, stripe, direction)
+            elapsed_ms = (time.perf_counter() - t0) * 1000.0
 
-        # рисуем время на выходном изображении
-        out_img = draw_processing_time(out_img, elapsed_ms, stripe, direction)
+            out_img = draw_processing_time(out_img, elapsed_ms, stripe, direction)
+            out_img.save(str(output_img_path))
+    except Exception as e:
+        new_captcha()
+        return render_template(
+            "index.html",
+            captcha=session["captcha"],
+            result_img=None,
+            hist_img=None,
+            download_url=None,
+            stripe=stripe,
+            direction=direction,
+            error=f"Ошибка обработки изображения: {type(e).__name__}",
+        )
 
-        # сохраняем результат
-        out_img.save(str(output_img_path))
-
-    # ----------------------------
-    # Сохраняем пути для конкретного пользователя в session
-    # (чтобы он видел свои результаты на странице)
-    # ----------------------------
+    # сохраняем для показа результата
     session["last_result_img"] = f"outputs/{output_img_path.name}"
     session["last_hist_img"] = f"outputs/{output_hist_path.name}"
     session["last_download_url"] = url_for("download_result", file_name=output_img_path.name)
-
     session["last_stripe"] = stripe
     session["last_direction"] = direction
 
-    # обновляем капчу на следующую попытку
     new_captcha()
-
     return redirect(url_for("index"))
-
 
 @app.route("/download/<path:file_name>")
 def download_result(file_name: str):
@@ -357,6 +357,7 @@ def static_files(filename):
 if __name__ == "__main__":
     # debug=True удобно для разработки, для деплоя обычно выключают
     app.run(host="0.0.0.0", port=5000, debug=True)
+
 
 
 
